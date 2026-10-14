@@ -1,0 +1,23 @@
+{
+  "id": 2025020100, "season": 20252026, "gameType": 2, "gameDate": "2025-10-21",
+  "startTimeUTC": "2025-10-21T23:00:00Z", "gameState": "OFF",
+  "periodDescriptor": {"number": 4, "periodType": "OT", "maxRegulationPeriods": 3},
+  "gameOutcome": {"lastPeriodType": "OT"},
+  "awayTeam": {"id": 28, "abbrev": "SJS", "score": 4, "sog": 36, "commonName": {"default": "Sharks"}, "placeName": {"default": "San Jose"}},
+  "homeTeam": {"id": 2, "abbrev": "NYI", "score": 3, "sog": 27, "commonName": {"default": "Islanders"}, "placeName": {"default": "NY Islanders"}},
+  "playerByGameStats": {
+    "awayTeam": {
+      "forwards": [{"playerId": 8484227, "sweaterNumber": 2, "name": {"default": "W. Smith"}, "position": "C", "goals": 1, "assists": 1, "points": 2, "powerPlayGoals": 1, "sog": 6, "toi": "21:32"}],
+      "defense": [{"playerId": 8480000, "name": {"default": "D. Example"}, "position": "D", "goals": 0, "assists": 2, "points": 2, "powerPlayGoals": 0, "sog": 2, "toi": "24:10"}],
+      "goalies": [
+        {"playerId": 8482137, "name": {"default": "Y. Askarov"}, "position": "G", "saveShotsAgainst": "23/27", "goalsAgainst": 3, "toi": "62:31", "starter": true, "decision": "W", "shotsAgainst": 27, "saves": 23},
+        {"playerId": 8481111, "name": {"default": "B. Backup"}, "position": "G", "toi": "00:00", "starter": false, "shotsAgainst": 0, "saves": 0, "goalsAgainst": 0}
+      ]
+    },
+    "homeTeam": {
+      "forwards": [{"playerId": 8478445, "name": {"default": "M. Barzal"}, "position": "C", "goals": 1, "assists": 0, "points": 1, "powerPlayGoals": 0, "sog": 4, "toi": "19:55"}],
+      "defense": [],
+      "goalies": [{"playerId": 8478009, "name": {"default": "I. Sorokin"}, "position": "G", "goalsAgainst": 4, "toi": "62:31", "starter": true, "decision": "O", "shotsAgainst": 36, "saves": 32}]
+    }
+  }
+}

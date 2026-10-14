@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NHL EDGE PRO</title>
+<meta name="description" content="Quantitative NHL betting research terminal: calibrated probabilities, fair prices, expected value, out-of-sample validation.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b1220'/%3E%3Cpath d='M7 22 L13 14 L18 18 L25 9' stroke='%2322d3ee' stroke-width='3' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/styles.css">
+<script src="assets/vendor/chart.umd.min.js" defer></script>
+<script src="assets/app.js" defer></script>
+</head>
+<body>
+<div id="demo-banner" class="demo-banner" hidden>DEMO MODE — synthetic teams, games and odds generated to exercise the software. Nothing here is a real prediction. <a href="./">Exit demo</a></div>
+<header class="topbar">
+  <button class="nav-toggle" id="nav-toggle" aria-label="Menu">☰</button>
+  <a class="brand" href="#/dashboard"><span class="brand-mark">◢</span> NHL EDGE <b>PRO</b></a>
+  <div class="topbar-status" id="topbar-status"></div>
+</header>
+<div class="layout">
+  <nav class="sidebar" id="sidebar">
+    <div class="nav-group">Markets</div>
+    <a href="#/dashboard">Dashboard</a>
+    <a href="#/game">Game Analyzer</a>
+    <a href="#/moneyline">Moneyline Lab</a>
+    <a href="#/puckline">Puck-Line Lab</a>
+    <a href="#/totals">Totals Lab</a>
+    <a href="#/props">Player Props Lab</a>
+    <a href="#/parlays">Parlay Intelligence Lab</a>
+    <div class="nav-group">Research</div>
+    <a href="#/goalies">Goalie Lab</a>
+    <a href="#/teams">Team Analytics</a>
+    <a href="#/odds">Odds Screen</a>
+    <a href="#/sim">Simulation Center</a>
+    <div class="nav-group">Validation</div>
+    <a href="#/backtest">Historical Backtester</a>
+    <a href="#/performance">Model Performance</a>
+    <a href="#/tracker">Bet Tracker &amp; Bankroll</a>
+    <a href="#/about">Methodology &amp; Data</a>
+    <a href="#/keys">Odds API Key</a>
+  </nav>
+  <main id="app" class="main"><div class="loading">Loading data…</div></main>
+</div>
+<footer class="footer">Research tool. Probabilities are model estimates with real uncertainty; no outcome is guaranteed. If gambling stops being fun, call 1-800-GAMBLER.</footer>
+</body>
+</html>

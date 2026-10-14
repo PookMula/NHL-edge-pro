@@ -1,0 +1,55 @@
+{
+  "backfill_start_season": 20152016,
+  "data_dir": "data",
+  "site_data_dir": "docs/data",
+
+  "model": {
+    "half_life_days": 120,
+    "ridge": 15,
+    "max_history_days": 900,
+    "goalie_prior_shots": 1000,
+    "goalie_half_life_days": 365,
+    "posterior_draws": 200,
+    "tune_hyperparameters": true
+  },
+
+  "simulation": {
+    "default_simulations": 10000,
+    "seed": 20261013
+  },
+
+  "backtest": {
+    "burn_in_seasons": 1,
+    "tuning_seasons": 2,
+    "aux_refit_days": 30,
+    "bootstrap_reps": 1000,
+    "grid_half_life_days": [60, 120, 240],
+    "grid_ridge": [5, 15, 40]
+  },
+
+  "odds": {
+    "provider": "the-odds-api",
+    "sport_key": "icehockey_nhl",
+    "regions": "us",
+    "markets": "h2h,spreads,totals",
+    "bookmakers": "",
+    "max_odds_age_minutes": 120
+  },
+
+  "edges": {
+    "min_ev": 0.02,
+    "min_ev_lower": 0.0,
+    "exclude_unknown_goalies": true,
+    "gate_tier": "EDGE_SUPPORTED",
+    "min_clv_bets_for_support": 200,
+    "min_market_games_for_competitive": 300
+  },
+
+  "parlays": {
+    "min_american": 600,
+    "max_legs": 4,
+    "legs_pool_per_book": 20,
+    "max_candidates_per_bucket": 10,
+    "max_reuse_of_leg": 3
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "_comment": "Optional. Keyed by slate date (ET), then team abbrev. CONFIRMED requires a named 'source' (e.g. a team beat reporter or an official team post) — without one it is downgraded to PROJECTED. Find goalie ids in docs/data/goalies.json.",
+  "2026-10-13": {
+    "_example_TOR": {"goalie_id": 8475883, "status": "CONFIRMED", "source": "official team post, 10:41 ET"}
+  }
+}
