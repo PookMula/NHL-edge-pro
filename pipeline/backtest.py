@@ -103,7 +103,7 @@ def walk(hist, eval_mask, hp, aux_refit_days=30, log=None):
                 "y_o65": float(t > 6.5), "p_o65": D.total_market("over", 6.5)[0], "b_o65": b_o65,
                 "p_tot": float(D.total[t]) if t < len(D.total) else EPS, "b_tot": float(tot_p[min(t, 20)]),
                 "exp_total": D.expected_total(), "total": t,
-                "home": games.home.iloc[gi], "away": games.away.iloc[gi]})
+                "home": games.home.iloc[gi], "away": games.away.iloc[gi], "game_id": int(games.game_id.iloc[gi])})
         if log and k % 100 == 0:
             log(f"    {d}: {len(recs)} games scored")
     return pd.DataFrame(recs)
@@ -222,6 +222,8 @@ def run_backtest(games, goalie_games, settings, hist_odds=None, log=print):
         "goalie_sensitivity": {"projected_ll": float(_ll(df.p_home, df.y_home).mean()),
                                "actual_ll": float(_ll(df.p_home_actual, df.y_home).mean())},
     }
+    out["h2h_test"] = h2h_test(df, min(reps, 400))
+    out["_preds"] = df[["game_id", "date", "home", "away", "p_home", "exp_total", "y_home", "total"]]
     mc = market_comparison(df, hist_odds, settings["edges"]["min_ev"], reps)
     if mc:
         out["market"] = mc
@@ -238,3 +240,54 @@ def tier_from_backtest(bt):
     mk = bt["markets"]
     ok = lambda k: bool(mk.get(k, {}).get("ci") and mk[k]["ci"][0] > 0)
     return {"h2h": ok("ml"), "spreads": ok("pl_home") and ok("pl_away"), "totals": ok("total") and ok("o55")}
+
+def _logit(p):
+    p = np.clip(p, 1e-6, 1 - 1e-6)
+    return np.log(p / (1 - p))
+
+
+def h2h_features(df, max_days=1095, max_meet=6, k=3.0):
+    """For each game, shrunk mean model residual over prior meetings of the same two teams (oriented to the
+    current home team). Uses only earlier games' walk-forward predictions -> no look-ahead."""
+    from .goalies import ordinal
+    d = df.sort_values("date").reset_index()
+    ords = np.array([ordinal(x) for x in d["date"]])
+    hist = {}
+    h_ml, h_tot, n_meet = np.zeros(len(d)), np.zeros(len(d)), np.zeros(len(d))
+    for i, r in enumerate(d.itertuples(index=False)):
+        key = tuple(sorted((r.home, r.away)))
+        prior = [x for x in hist.get(key, []) if ords[i] - x[0] <= max_days and x[0] < ords[i]][-max_meet:]
+        if prior:
+            rm = [(x[2] if x[1] == r.home else -x[2]) for x in prior]
+            h_ml[i] = sum(rm) / (len(rm) + k)
+            h_tot[i] = sum(x[3] for x in prior) / (len(prior) + k)
+            n_meet[i] = len(prior)
+        hist.setdefault(key, []).append((ords[i], r.home, r.y_home - r.p_home, r.total - r.exp_total))
+    out = pd.DataFrame({"h2h_ml": h_ml, "h2h_tot": h_tot, "h2h_n": n_meet}, index=d["index"])
+    return out.sort_index()
+
+
+def h2h_test(df, reps=400):
+    """Fit a one-parameter H2H adjustment on the first half of the test period, score it on the second half."""
+    f = h2h_features(df)
+    d = df.join(f)
+    dates = np.sort(d["date"].unique())
+    cut = dates[len(dates) // 2]
+    a, b = d[d.date < cut], d[d.date >= cut]
+    res = {}
+    for name, pcol, ycol, hcol in (("moneyline", "p_home", "y_home", "h2h_ml"), ("over 5.5", "p_o55", "y_o55", "h2h_tot")):
+        best = (np.inf, 0.0)
+        for coef in np.linspace(-3, 3, 61):
+            ll = _ll(1 / (1 + np.exp(-(_logit(a[pcol]) + coef * a[hcol]))), a[ycol]).mean()
+            if ll < best[0]:
+                best = (ll, float(coef))
+        coef = best[1]
+        p_adj = 1 / (1 + np.exp(-(_logit(b[pcol]) + coef * b[hcol])))
+        diff = _ll(b[pcol].to_numpy(), b[ycol].to_numpy()) - _ll(p_adj.to_numpy(), b[ycol].to_numpy())
+        res[name] = {"coef": coef, "improvement": float(diff.mean()), "ci": _boot_ci(diff, b.date.to_numpy(), reps),
+                     "n_eval": int(len(b)), "share_with_h2h": float((b.h2h_n > 0).mean())}
+    res["helps"] = {k: bool(v["coef"] != 0 and v["ci"] and v["ci"][0] > 1e-6) for k, v in res.items()}
+    res["note"] = ("Coefficient fit on the first half of the test seasons, scored on the second half. "
+                   "Feature = shrunk average of how much each team beat the model's expectation in their last "
+                   "6 meetings within 3 years.")
+    return res

@@ -21,7 +21,8 @@ UNAVAILABLE = [
     "Line combinations / projected lineups — no licensed lineup feed connected.",
     "Starting-goalie confirmations — no confirmation feed; goalies are PROJECTED unless you add a sourced entry to config/goalie_overrides.json.",
     "Expected goals (xG), GSAx, Corsi/Fenwick, danger-zone chances, zone time — require MoneyPuck / Natural Stat Trick / Evolving-Hockey under their terms.",
-    "First-period markets, team totals odds, alternate lines and player props odds — need the per-event odds endpoint (extra API cost); not fetched.",
+    "First-period markets, team-total odds and alternate lines — need the per-event odds endpoint (extra API cost); not fetched. Player prop odds are fetched once a day only while Odds API credits allow.",
+    "Injuries / scratches for player props — lineups are projected from each team's last game.",
     "Same-game parlay prices — books quote SGPs with their own correlation pricing; not available from the odds feed.",
     "True opening lines and historical closing lines before this pipeline started — only prices this pipeline captured are shown.",
     "Travel / time-zone effects — not yet modeled.",
@@ -42,7 +43,7 @@ def _f(x, n=3):
 
 
 def build_site(store, slate_rows, odds_rows, statuses, settings, out_dir, now, today, mode="live",
-               overrides=None, log=print):
+               overrides=None, log=print, rosters=None, prop_rows=None):
     out_dir = Path(out_dir)
     ms = dict(settings["model"])
     bt_path = store.path("backtest_results.json")
@@ -154,6 +155,8 @@ def build_site(store, slate_rows, odds_rows, statuses, settings, out_dir, now, t
                                          "season_gsaa": gs["season"]["gsaa"] if gs else None,
                                          "rest_days": gs["rest_days"] if gs else None}}
         cand = [e for e in evals if e["candidate"]]
+        h2h = team_h2h(games, g["home"], g["away"])
+        picks = make_picks(g, f, summ, evals, tstats, beta, h2h, goalies.get("league_sv"))
         books = sorted({r["book_title"] for r in orows})
         main_total = None
         tots = [r["point"] for r in orows if r["market"] == "totals"]
@@ -166,10 +169,13 @@ def build_site(store, slate_rows, odds_rows, statuses, settings, out_dir, now, t
             "odds": {"rows": [{"book": r["book_title"], "market": r["market"], "side": r["side"], "point": r["point"],
                                "price": r["price"], "last_update": r.get("last_update")} for r in orows],
                      "books": books, "fetched_at": latest, "main_total": main_total,
+                     "event_id": next((r.get("event_id") for r in orows if r.get("event_id")), None),
                      "status_note": None if orows else statuses.get("odds_note", "No odds for this game.")},
             "edge_ids": [e["id"] for e in cand],
             "edge_rows": [{k: e[k] for k in ("id", "market", "side", "point", "book", "ev_p10")} for e in cand],
-            "insights": insights,
+            "insights": insights, "picks": picks, "h2h": h2h,
+            "form": {side: {w: tstats.get(g[side], {}).get("windows", {}).get(w) for w in ("L5", "L10", "L15", "L20", "season")}
+                     for side in ("home", "away")},
             "data_quality": [
                 {"item": "Results through", "value": str(games.date.max())},
                 {"item": "Training games (weight>1%)", "value": str(int((0.5 ** ((today_ord - hist.dord[0::2]) / model.hl) > 0.01).sum()))},
@@ -253,7 +259,22 @@ def build_site(store, slate_rows, odds_rows, statuses, settings, out_dir, now, t
 
     skater_rows = 0
     for p in store.dir.glob("skaters_*.csv.gz"):
-        skater_rows += sum(1 for _ in pd.read_csv(p, usecols=["game_id"]).itertuples())
+        skater_rows += len(pd.read_csv(p, usecols=["game_id"]))
+    # --- player props ---
+    from . import props as PR
+    from .props_backtest import tiers_from as prop_tiers_from
+    pbt_path = store.path("props_backtest.json")
+    props_bt = json.loads(pbt_path.read_text()) if pbt_path.exists() else {"available": False,
+                                                                             "reason": "Props backtest has not been run yet."}
+    ptiers = prop_tiers_from(props_bt)
+    try:
+        props_json = PR.build_tonight(store, games, gg, slate_rows, feats, hist.feats, rosters or {}, prop_rows or [],
+                                      settings, nowiso, ptiers, log)
+    except Exception as e:  # never let a props failure take down the site
+        import traceback
+        log("props failed:", e, traceback.format_exc()[-800:])
+        props_json = {"available": False, "reason": f"Prop engine error: {e}", "players": [], "goalies": []}
+    props_json["backtest"] = props_bt
     meta = {
         "mode": mode, "generated_at": nowiso, "slate_date": today.isoformat(),
         "data_through": str(games.date.max()) if len(games) else None, "n_games_history": int(len(games)),
@@ -261,7 +282,8 @@ def build_site(store, slate_rows, odds_rows, statuses, settings, out_dir, now, t
         "model": {"status": "EXPERIMENTAL" if not backtest.get("available") else
                   ("BACKTESTED" if any(bt_t.values()) else "BACKTESTED (no edge over baseline)"),
                   "fitted_at": fitted_at, "hyper": {"half_life_days": model.hl, "ridge": model.ridge},
-                  "aux": model.aux, "draws": n_draws, "tiers": tiers}}
+                  "aux": model.aux, "draws": n_draws, "tiers": tiers, "prop_tiers": ptiers,
+                  "h2h_test": backtest.get("h2h_test")}}
     slate_json = {"date": today.isoformat(), "source": "NHL API (api-web.nhle.com)", "fetched_at": statuses.get("nhl_fetched_at"),
                   "odds_source": statuses.get("odds_source"), "odds_fetched_at": statuses.get("odds_fetched_at"),
                   "games": slate_out}
@@ -269,7 +291,7 @@ def build_site(store, slate_rows, odds_rows, statuses, settings, out_dir, now, t
     beta["seed"] = seed
     for name, obj in (("meta", meta), ("slate", slate_json), ("edges", edges_json), ("parlays", parlays_json),
                       ("teams", teams), ("goalies", goalies), ("backtest", backtest), ("market_eval", mev),
-                      ("odds_history", {"games": oh}), ("model_params", beta)):
+                      ("odds_history", {"games": oh}), ("model_params", beta), ("props", props_json)):
         write_json(out_dir / f"{name}.json", obj)
     log(f"site data written to {out_dir} | {len(slate_out)} games, {len(cands)} candidates, {len(qual)} qualified, "
         f"{len(pq)}+{len(pc)} parlays from {nsearch} combos")
@@ -341,3 +363,108 @@ def edge_reasons(e, f, s, insights):
     if e["market"] == "h2h":
         risks.append(f"Overtime/shootout ({100 * (s['p_ot'] + s['p_so']):.0f}%) is close to a coin flip for either side.")
     return reasons, risks
+
+
+def team_h2h(games, home, away, n=10):
+    """Last n meetings between the two teams (any venue), oriented to tonight's home team. Context only:
+    the backtest found no out-of-sample value in adjusting predictions for H2H results."""
+    m = games[((games.home == home) & (games.away == away)) | ((games.home == away) & (games.away == home))]
+    m = m.sort_values("date").tail(n)
+    rows, w, tot, marg = [], 0, [], []
+    for r in m.itertuples(index=False):
+        hg = r.home_goals if r.home == home else r.away_goals
+        ag = r.away_goals if r.home == home else r.home_goals
+        w += int(hg > ag)
+        tot.append(hg + ag)
+        marg.append(hg - ag)
+        rows.append({"date": r.date, "venue": r.home, "home_goals": int(r.home_goals), "away_goals": int(r.away_goals),
+                     "home": r.home, "away": r.away, "ot": r.last_period if r.last_period in ("OT", "SO") else ""})
+    return {"games": rows[::-1], "n": len(rows), "home_wins": w, "away_wins": len(rows) - w,
+            "avg_total": float(np.mean(tot)) if tot else None, "avg_margin_home": float(np.mean(marg)) if marg else None,
+            "over_55": float(np.mean([t > 5.5 for t in tot])) if tot else None}
+
+
+def make_picks(g, f, s, evals, tstats, beta, h2h, league_sv):
+    """One suggestion per market (moneyline, puck line, total). With prices: the side with the best EV at the
+    best available price, graded BET (validated edge) / VALUE (positive pessimistic EV, unvalidated) /
+    LEAN (positive EV) / PASS. Without prices: the model's side and fair price only."""
+    from .edges import best_per_selection
+    home, away = g["home"], g["away"]
+    best = best_per_selection(evals) if evals else []
+    tots = [e["point"] for e in best if e["market"] == "totals"]
+    main_total = max(set(tots), key=tots.count) if tots else None
+    ti = {t: i for i, t in enumerate(beta["teams"])}
+
+    def form(t, w="L10"):
+        x = tstats.get(t, {}).get("windows", {}).get(w) or {}
+        return f'{t} last {x.get("gp", 0)}: {x.get("w", 0)}-{x.get("gp", 0) - x.get("w", 0)}, {x.get("gf", 0):.2f} GF / {x.get("ga", 0):.2f} GA' if x.get("gp") else None
+
+    def goalie_line(side):
+        gi = f[side]["goalie"]
+        return (f'{g[side]} goalie {gi["name"]} ({f[side]["status"].lower()}) rating SV% {gi["sv_rating"]:.3f}'
+                + (f' vs league {league_sv:.3f}' if league_sv else "")) if gi else f"{g[side]} goalie unknown"
+
+    def rating(t):
+        i = ti.get(t)
+        return None if i is None else beta["att"][i] + beta["def"][i]
+    rh, ra = rating(home), rating(away)
+    h2h_line = (f'H2H last {h2h["n"]}: {home} {h2h["home_wins"]}-{h2h["away_wins"]}, avg total {h2h["avg_total"]:.1f} '
+                f'(context only — not used in the probabilities)') if h2h["n"] else "No recent H2H meetings"
+    common = [x for x in (form(away), form(home), goalie_line("away"), goalie_line("home"), h2h_line) if x]
+
+    def grade(e):
+        if e["qualified"]:
+            return "BET"
+        if e["candidate"]:
+            return "VALUE"
+        if e["ev"] > 0:
+            return "LEAN"
+        return "PASS"
+
+    picks = []
+    for market, title in (("h2h", "Moneyline"), ("spreads", "Puck line"), ("totals", "Total")):
+        opts = [e for e in best if e["market"] == market and (market != "totals" or e["point"] == main_total)
+                and (market != "spreads" or abs(abs(e["point"]) - 1.5) < 1e-9)]
+        why = []
+        if market == "h2h":
+            fav = home if s["p_home_ml"] >= 0.5 else away
+            why.append(f'Model: {home} {100 * s["p_home_ml"]:.1f}% / {away} {100 * s["p_away_ml"]:.1f}% '
+                       f'(regulation {100 * s["p_reg_home"]:.0f}/{100 * s["p_reg_tie"]:.0f}/{100 * s["p_reg_away"]:.0f})')
+            if rh is not None and ra is not None:
+                why.append(f'Team strength (attack+defence, log scale): {home} {rh:+.3f}, {away} {ra:+.3f}')
+        elif market == "spreads":
+            why.append(f'Projected margin {home} {s["exp_margin"]:+.2f}; {home} −1.5 {100 * s["p_home_m15"]:.1f}%, '
+                       f'{away} −1.5 {100 * s["p_away_m15"]:.1f}%; 1-goal games end in OT/SO {100 * (s["p_ot"] + s["p_so"]):.0f}% of the time')
+        else:
+            why.append(f'Projected total {s["exp_total"]:.2f} (80% band {s["interval"]["exp_total"][0]:.2f}–{s["interval"]["exp_total"][1]:.2f}); '
+                       f'{away} {s["exp_away"]:.2f}, {home} {s["exp_home"]:.2f}')
+        if opts:
+            e = max(opts, key=lambda x: x["ev"])
+            picks.append({"market": market, "title": title, "label": label_for(e, g), "side": e["side"], "point": e["point"],
+                          "price": e["price"], "book": e["book"], "p": e["p_win"], "push": e["p_push"], "fair": e["fair_american"],
+                          "ev": e["ev"], "ev_p10": e["ev_p10"], "grade": grade(e), "tier": e["tier"], "edge_id": e.get("id"),
+                          "why": why + common})
+        else:
+            if market == "h2h":
+                side = "home" if s["p_home_ml"] >= 0.5 else "away"
+                p = s["p_home_ml"] if side == "home" else s["p_away_ml"]
+                lab, pt = f"{g[side]} ML", None
+            elif market == "spreads":
+                side = "home" if s["exp_margin"] >= 0 else "away"
+                p = s["p_home_m15"] if side == "home" else s["p_away_m15"]
+                if p < 0.5:  # the favourite rarely covers -1.5: the model's side is the underdog +1.5
+                    side = "away" if side == "home" else "home"
+                    p = 1 - (s["p_away_m15"] if side == "home" else s["p_home_m15"])
+                    pt = 1.5
+                else:
+                    pt = -1.5
+                lab = f"{g[side]} {pt:+g}"
+            else:
+                line = 6.5 if s["exp_total"] >= 6.0 else 5.5
+                o = s["totals"][str(line)]["over"]
+                side, pt, p = ("over", line, o) if o >= 0.5 else ("under", line, 1 - o)
+                lab = f'{"Over" if side == "over" else "Under"} {line}'
+            picks.append({"market": market, "title": title, "label": lab, "side": side, "point": pt, "price": None,
+                          "book": None, "p": p, "push": 0.0, "fair": (100 * p / (1 - p) * -1 if p >= 0.5 else 100 * (1 - p) / p),
+                          "ev": None, "ev_p10": None, "grade": "NO PRICE", "why": why + common})
+    return picks

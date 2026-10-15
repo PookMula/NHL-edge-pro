@@ -30,7 +30,7 @@ def _agg(df):
     sf, sa, gf, ga = df.sf.sum(), df.sa.sum(), df.gf.sum(), df.ga.sum()
     sh = gf / sf if sf else np.nan
     sv = 1 - ga / sa if sa else np.nan
-    return {"gp": int(len(df)), "gf": gf / len(df), "ga": ga / len(df), "sf": sf / len(df), "sa": sa / len(df),
+    return {"gp": int(len(df)), "w": int((df.gf > df.ga).sum()), "gf": gf / len(df), "ga": ga / len(df), "sf": sf / len(df), "sa": sa / len(df),
             "sf_pct": sf / (sf + sa) if sf + sa else None, "sh_pct": sh, "sv_pct": sv, "pdo": sh + sv,
             "ppg": float(df.ppg.mean()) if df.ppg.notna().any() else None}
 
@@ -46,7 +46,7 @@ def teams_json(games, skaters, ratings, name_logo, current_season):
         cur = d[d.season == current_season]
         if not len(cur):
             cur = d[d.season == d.season.max()]
-        w = {f"L{n}": _agg(d.tail(n)) for n in (3, 5, 10, 20)}
+        w = {f"L{n}": _agg(d.tail(n)) for n in (3, 5, 10, 15, 20)}
         w["season"] = _agg(cur)
         w["prev_season"] = _agg(d[d.season == prev])
         w["home"] = _agg(cur[cur.is_home == 1])

@@ -57,3 +57,23 @@ class NHLClient:
 
     def boxscore(self, game_id):
         return self.get(f"gamecenter/{game_id}/boxscore")
+
+
+def fetch_rosters(client, teams):
+    """{TEAM: [{id, firstName, lastName, pos}]} from the current NHL roster endpoint. Missing teams are skipped."""
+    out = {}
+    for t in teams:
+        try:
+            r = client.get(f"roster/{t}/current")
+        except NHLApiError:
+            continue
+        lst = []
+        for grp in ("forwards", "defensemen", "goalies"):
+            for p in r.get(grp, []):
+                fn = (p.get("firstName") or {}).get("default", "")
+                ln = (p.get("lastName") or {}).get("default", "")
+                lst.append({"id": int(p["id"]), "firstName": fn, "lastName": ln, "pos": p.get("positionCode", ""),
+                            "headshot": p.get("headshot", "")})
+        if lst:
+            out[t] = lst
+    return out

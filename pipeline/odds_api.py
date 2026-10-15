@@ -100,3 +100,76 @@ def archive(rows, data_dir, date_str):
 def get_key():
     k = os.environ.get("ODDS_API_KEY", "").strip()
     return k or None
+
+
+# ------------------------------------------------------------------ player props (per-event endpoint)
+PROP_COLS = ["fetched_at", "event_id", "game_id", "home", "away", "book", "book_title", "stat", "market",
+             "player", "side", "point", "price", "last_update"]
+
+
+def fetch_event_props(api_key, event_id, markets, sport="icehockey_nhl", regions="us", bookmakers=""):
+    """Cost = (# markets returned) x (# regions). Returns (event json, usage headers)."""
+    q = {"apiKey": api_key, "regions": regions, "markets": ",".join(markets), "oddsFormat": "american", "dateFormat": "iso"}
+    if bookmakers:
+        q["bookmakers"] = bookmakers
+        q.pop("regions")
+    url = f"{BASE}/sports/{sport}/events/{event_id}/odds?{urllib.parse.urlencode(q)}"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Accept": "application/json"}), timeout=30) as r:
+            return json.loads(r.read().decode()), {"remaining": r.headers.get("x-requests-remaining"),
+                                                   "last": r.headers.get("x-requests-last")}
+    except urllib.error.HTTPError as e:
+        raise OddsApiError(f"HTTP {e.code}: {e.read().decode(errors='ignore')[:300]}") from e
+    except urllib.error.URLError as e:
+        raise OddsApiError(f"network error: {e}") from e
+
+
+def normalize_props(ev, fetched_at, game_id, home, away):
+    from .props import PROP_MARKETS
+    rows = []
+    for bk in ev.get("bookmakers", []):
+        for mk in bk.get("markets", []):
+            stat = PROP_MARKETS.get(mk["key"])
+            if not stat:
+                continue
+            for o in mk.get("outcomes", []):
+                nm = str(o.get("name", "")).lower()
+                if nm in ("over", "under"):
+                    side, player, point = nm, o.get("description"), o.get("point")
+                elif nm in ("yes", "no"):          # anytime goal scorer: Yes = over 0.5 goals
+                    side, player, point = ("over" if nm == "yes" else "under"), o.get("description"), 0.5
+                else:                               # some books put the player in `name` for Yes-only markets
+                    side, player, point = "over", o.get("name"), o.get("point", 0.5)
+                if player is None or point is None or o.get("price") is None:
+                    continue
+                rows.append({"fetched_at": fetched_at, "event_id": ev.get("id"), "game_id": game_id, "home": home,
+                             "away": away, "book": bk["key"], "book_title": bk.get("title", bk["key"]), "stat": stat,
+                             "market": mk["key"], "player": player, "side": side, "point": float(point),
+                             "price": float(o["price"]), "last_update": mk.get("last_update")})
+    return rows
+
+
+def archive_props(rows, data_dir, date_str):
+    p = Path(data_dir) / "prop_odds" / f"{date_str}.csv"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    new = not p.exists()
+    with p.open("a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=PROP_COLS)
+        if new:
+            w.writeheader()
+        for r in rows:
+            w.writerow({k: ("" if r.get(k) is None else r.get(k)) for k in PROP_COLS})
+
+
+def latest_props(data_dir, date_str):
+    """Latest snapshot per game from today's prop archive (list of dicts)."""
+    import pandas as pd
+    p = Path(data_dir) / "prop_odds" / f"{date_str}.csv"
+    if not p.exists():
+        return []
+    df = pd.read_csv(p)
+    if not len(df):
+        return []
+    last = df.groupby("game_id").fetched_at.transform("max")
+    df = df[df.fetched_at == last]
+    return df.to_dict("records")

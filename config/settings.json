@@ -45,6 +45,14 @@
     "min_market_games_for_competitive": 300
   },
 
+  "props": {
+    "odds_enabled": true,
+    "markets": ["player_shots_on_goal", "player_points", "player_goal_scorer_anytime", "player_total_saves"],
+    "min_credits_reserve": 60,
+    "fetch_hours_utc": [21],
+    "max_odds_age_minutes": 240
+  },
+
   "parlays": {
     "min_american": 600,
     "max_legs": 4,

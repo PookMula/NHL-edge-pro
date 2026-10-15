@@ -106,13 +106,88 @@ def cmd_daily(settings, store, args):
         except odds_api.OddsApiError as e:
             statuses["odds_note"] = f"Odds feed error: {e}"
             statuses["sources"].append({"name": odds_api.SOURCE_NAME, "short": "ODDS", "status": "error", "detail": str(e)[:200]})
+    usage_remaining = None
+    for src in statuses["sources"]:
+        if src.get("short") == "ODDS" and "credits remaining" in str(src.get("detail")):
+            try:
+                usage_remaining = int(str(src["detail"]).split("credits remaining ")[1].split(";")[0])
+            except (IndexError, ValueError):
+                pass
+    if not odds_rows and slate:
+        odds_rows = latest_game_odds(store, today)
+        if odds_rows:
+            statuses["odds_fetched_at"] = odds_rows[0]["fetched_at"]
+            statuses["odds_source"] = odds_api.SOURCE_NAME + " (last archived snapshot)"
+    # ---- current rosters (full names, headshots, trade filter) -- once per day
+    rosters = {}
+    rp = store.path("rosters.json")
+    cached = json.loads(rp.read_text()) if rp.exists() else {}
+    teams_today = sorted({r["home"] for r in slate} | {r["away"] for r in slate})
+    if cached.get("date") == today.isoformat() and all(t in cached.get("teams", {}) for t in teams_today):
+        rosters = cached["teams"]
+    elif teams_today:
+        from .nhl_api import fetch_rosters
+        rosters = {**cached.get("teams", {}), **fetch_rosters(client, teams_today)}
+        rp.write_text(json.dumps({"date": today.isoformat(), "teams": rosters}))
+    # ---- player prop odds (per-event endpoint; costs credits) -- once per day by default
+    ps = settings.get("props", {})
+    prop_note = None
+    if key and slate and odds_rows and ps.get("odds_enabled"):
+        archive_p = store.path(f"prop_odds/{today.isoformat()}.csv")
+        hours = ps.get("fetch_hours_utc", [21])
+        # props are posted in the afternoon: fetch on the configured run(s), or the first run after them
+        want = (now.hour in hours) or (not archive_p.exists() and hours and now.hour >= min(hours))
+        ev_ids = {}
+        for r in odds_rows:
+            for g in slate:
+                if r["home"] == g["home"] and r["away"] == g["away"] and g.get("game_state") in ("FUT", "PRE"):
+                    ev_ids[g["game_id"]] = (r["event_id"], g["home"], g["away"])
+        est = len(ev_ids) * len(ps.get("markets", []))
+        if want and ev_ids:
+            if usage_remaining is not None and usage_remaining - est < ps.get("min_credits_reserve", 60):
+                prop_note = (f"Prop odds skipped: ~{est} credits needed, {usage_remaining} remaining "
+                             f"(reserve {ps.get('min_credits_reserve', 60)}).")
+            else:
+                prows, rem = [], usage_remaining
+                for gid, (eid, h, a) in ev_ids.items():
+                    try:
+                        evj, use = odds_api.fetch_event_props(key, eid, ps["markets"], os_["sport_key"], os_["regions"], os_["bookmakers"])
+                        prows += odds_api.normalize_props(evj, iso(now), gid, h, a)
+                        rem = use.get("remaining", rem)
+                    except odds_api.OddsApiError as e:
+                        prop_note = f"Prop odds error: {e}"
+                odds_api.archive_props(prows, store.dir, today.isoformat())
+                prop_note = prop_note or f"{len(prows)} prop prices for {len(ev_ids)} games; credits remaining {rem}"
+        statuses["sources"].append({"name": "The Odds API — player props", "short": "PROPS",
+                                    "status": "ok" if archive_p.exists() else ("skipped" if prop_note else "waiting"),
+                                    "fetched_at": iso(now) if want else None,
+                                    "used_for": "player prop prices (shots, points, anytime goal, saves)",
+                                    "detail": prop_note or ("using today's earlier prop snapshot" if archive_p.exists()
+                                                            else f"prop odds are fetched on the {', '.join(str(h) for h in hours)}:xx UTC run")})
+    prop_rows = odds_api.latest_props(store.dir, today.isoformat())
     if not len(store.games()):
         log("No historical games stored — run backfill first. Writing status-only meta.")
         write_json(ROOT / settings["site_data_dir"] / "meta.json", {"mode": "live", "generated_at": iso(now),
                    "sources": statuses["sources"], "model": {"status": "NO DATA"}, "unavailable": []})
         return
     build_site(store, slate, odds_rows, statuses, settings, ROOT / settings["site_data_dir"], now, today, "live",
-               load_overrides(today), log)
+               load_overrides(today), log, rosters=rosters, prop_rows=prop_rows)
+
+
+def latest_game_odds(store, today):
+    p = store.path(f"odds/{today.isoformat()}.csv")
+    if not p.exists():
+        return []
+    df = pd.read_csv(p)
+    if not len(df):
+        return []
+    df = df[df.fetched_at == df.fetched_at.max()]
+    df["point"] = pd.to_numeric(df["point"], errors="coerce")
+    rows = df.to_dict("records")
+    for r in rows:
+        if r["point"] != r["point"]:
+            r["point"] = None
+    return rows
 
 
 def cmd_backtest(settings, store, args):
@@ -121,7 +196,14 @@ def cmd_backtest(settings, store, args):
     ho = store.path("historical_odds.csv")
     hist_odds = pd.read_csv(ho) if ho.exists() else None
     res = run_backtest(games, gg, settings, hist_odds, log)
+    preds = res.pop("_preds", None)
+    if preds is not None:
+        preds.to_csv(store.path("backtest_preds.csv"), index=False)
     write_json(store.path("backtest_results.json"), res)
+    from .props_backtest import run_props_backtest
+    log("props backtest")
+    pres = run_props_backtest(store, settings, log)
+    write_json(store.path("props_backtest.json"), pres)
     log("backtest:", json.dumps({k: res.get(k) for k in ("available", "n_test_games", "test_period", "hyper", "runtime", "reason")}))
 
 

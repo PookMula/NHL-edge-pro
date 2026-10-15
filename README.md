@@ -51,6 +51,19 @@ python -m http.server -d docs 8000        # open http://localhost:8000  (or /?de
 
 Force the fallback for history: `python -m pipeline.run backfill --source espn`.
 
+## Player props (shots, goals, assists, points, goalie saves)
+
+* **Inputs (all pre-game):** recency-weighted per-game rate shrunk to the position average; last 5 / 10 / 20 / season form; recent ice time; opponent shots and goals allowed; opposing goalie; own team scoring; home ice; the player's last ≤10 games vs tonight's opponent (H2H).
+* **Model:** one regression per stat, negative-binomial distribution → probability for any line. Saves = projected shots faced × shrunk save % (+ pulled-early mixture).
+* **Validation:** trained on 2015-18, tested on 2018-present (355k player-games). Beats the player's last-10-games hit rate on every line tested. Ablations show form, H2H and opponent each add a little; hot/cold streaks regress.
+* **Site:** Player Props Lab (L5/L10/L15/L20/season/H2H hit rates, model probability, fair price, EV when prices exist) and a page per player (game log, chart vs line, H2H table, model weights).
+* **Prop odds:** fetched once a day on the 21:xx UTC run (≈4 credits per game) while credits stay above `props.min_credits_reserve`; or press *Load prop odds* on the Props page to use your key in the browser. The free Odds API tier will not cover daily prop odds for a full slate.
+* **Lineups:** projected from each team's most recent game, filtered to the current NHL roster. Injuries/scratches are not in the feed.
+
+## Game picks
+
+Every game gets a moneyline, puck-line and total suggestion graded **BET** (validated edge) / **VALUE** (positive EV even at the model's pessimistic estimate) / **LEAN** / **PASS**, with the reasons: team strength, L10 form, goalies, projected margin/total. Team H2H history and L5/L10/L15/L20 form are shown on each game page. The backtest tested H2H as a model input and found no out-of-sample value, so it is context only.
+
 ## Architecture
 
 ```
